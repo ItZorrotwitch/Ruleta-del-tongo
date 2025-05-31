@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ruleta de Sorteo Twitch</title>
+  <style>
+    body {
+      margin: 0;
+      background: #111;
+      color: white;
+      font-family: sans-serif;
+      display: flex;
+    }
+    #sidebar {
+      width: 250px;
+      background: #222;
+      padding: 10px;
+      overflow-y: auto;
+      height: 100vh;
+    }
+    #participantList {
+      list-style: none;
+      padding: 0;
+    }
+    #participantList li {
+      padding: 5px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid #444;
+    }
+    #participantList button {
+      background: red;
+      color: white;
+      border: none;
+      cursor: pointer;
+    }
+    #main {
+      flex: 1;
+      text-align: center;
+    }
+    canvas {
+      margin-top: 20px;
+    }
+    #winner {
+      font-size: 2em;
+      margin-top: 20px;
+      color: gold;
+    }
+    #timer {
+      font-size: 3em;
+      color: red;
+    }
+    #timeoutMessage {
+      margin-top: 40px;
+      font-size: 2em;
+      color: #ff5555;
+      display: none;
+      padding: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div id="sidebar">
+    <h2>Participantes</h2>
+    <ul id="participantList"></ul>
+  </div>
+  <div id="main">
+    <h1>🎡 Ruleta de Sorteo Twitch</h1>
+    <canvas id="wheelCanvas" width="500" height="500"></canvas>
+    <div id="winner"></div>
+    <div id="timer"></div>
+    <div id="timeoutMessage">PARA SER TÓXICO TAMBIÉN SE TIENE QUE SER ESPABILADO.  VUELVE A PROBAR MAÑANA</div>
+  </div>
+  <script src="https://cdn.jsdelivr.net/npm/tmi.js@1.8.5"></script>
+  <script>
+    const canvas = document.getElementById("wheelCanvas");
+    const ctx = canvas.getContext("2d");
+    const radius = canvas.width / 2;
+    const participants = [];
+    const blocked = new Set();
+    let currentAngle = 0;
+    let spinning = false;
+    let selected = null;
+    let claimTimeout = null;
+    let claimResolved = false;
+
+    function updateParticipantList() {
+      const list = document.getElementById("participantList");
+      list.innerHTML = "";
+      participants.forEach((user, index) => {
+        const li = document.createElement("li");
+        li.innerHTML = `${user} <button onclick="removeParticipant(${index})">❌</button>`;
+        list.appendChild(li);
+      });
+    }
+
+    function removeParticipant(index) {
+      const removed = participants.splice(index, 1)[0];
+      blocked.add(removed);
+      drawWheel();
+      updateParticipantList();
+    }
+
+    function drawWheel() {
+      const sliceAngle = 2 * Math.PI / participants.length;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      for (let i = 0; i < participants.length; i++) {
+        const angle = i * sliceAngle + currentAngle;
+        ctx.beginPath();
+        ctx.moveTo(radius, radius);
+        ctx.arc(radius, radius, radius, angle, angle + sliceAngle);
+        ctx.fillStyle = `hsl(${i * (360 / participants.length)}, 70%, 50%)`;
+        ctx.fill();
+        ctx.fillStyle = "black";
+        ctx.save();
+        ctx.translate(radius, radius);
+        ctx.rotate(angle + sliceAngle / 2);
+        ctx.textAlign = "right";
+        ctx.font = "bold 16px sans-serif";
+        ctx.fillText(participants[i], radius - 10, 10);
+        ctx.restore();
+      }
+    }
+
+    function spinWheel() {
+      if (participants.length < 2 || spinning) return;
+      spinning = true;
+      let spins = 20 + Math.floor(Math.random() * 10);
+      let angle = 0;
+      const interval = setInterval(() => {
+        angle += 0.1;
+        currentAngle += 0.1;
+        drawWheel();
+        if (--spins <= 0) {
+          clearInterval(interval);
+          finalizeWinner();
+        }
+      }, 30);
+    }
+
+    function finalizeWinner() {
+      const sliceAngle = 2 * Math.PI / participants.length;
+      const index = Math.floor((2 * Math.PI - (currentAngle % (2 * Math.PI))) / sliceAngle) % participants.length;
+      selected = participants[index];
+      document.getElementById("winner").textContent = `🎉 Ganador: ${selected}`;
+      document.getElementById("timeoutMessage").style.display = "none";
+      startTimer(30);
+      claimResolved = false;
+      spinning = false;
+    }
+
+    function startTimer(seconds) {
+      const timerEl = document.getElementById("timer");
+      timerEl.textContent = `${seconds}s`;
+      if (claimTimeout) clearInterval(claimTimeout);
+      claimTimeout = setInterval(() => {
+        seconds--;
+        timerEl.textContent = `${seconds}s`;
+        if (seconds <= 0) {
+          clearInterval(claimTimeout);
+          if (!claimResolved) {
+            timerEl.textContent = "⏰ ¡Tiempo agotado!";
+            document.getElementById("timeoutMessage").style.display = "block";
+          }
+        }
+      }, 1000);
+    }
+
+    let twitchClient;
+    if (!window.twitchClient) {
+      twitchClient = window.twitchClient = new tmi.Client({
+        options: { debug: true },
+        connection: {
+          reconnect: true,
+          secure: true
+        },
+        channels: ["aqui_va_tu_canal"]
+      });
+
+      twitchClient.connect();
+
+      twitchClient.on('message', (channel, tags, message, self) => {
+        if (self) return;
+        const username = tags['display-name'] || tags.username;
+        const cleanMsg = message.trim().toLowerCase();
+
+        if (cleanMsg === '!cabesa') {
+          if (!participants.includes(username) && !blocked.has(username)) {
+            participants.push(username);
+            drawWheel();
+            updateParticipantList();
+          }
+        }
+
+        if (cleanMsg === '!sortear') {
+          spinWheel();
+        }
+
+        if (selected && username === selected && !claimResolved) {
+          claimResolved = true;
+          clearInterval(claimTimeout);
+          document.getElementById("timer").textContent = "✅ ¡Premio reclamado!";
+          document.getElementById("timeoutMessage").style.display = "none";
+        }
+      });
+    }
+  </script>
+</body>
+</html>
